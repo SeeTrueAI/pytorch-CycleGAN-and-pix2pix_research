@@ -18,6 +18,7 @@ See options/base_options.py and options/train_options.py for more training optio
 See training and test tips at: https://github.com/junyanz/pytorch-CycleGAN-and-pix2pix/blob/master/docs/tips.md
 See frequently asked questions at: https://github.com/junyanz/pytorch-CycleGAN-and-pix2pix/blob/master/docs/qa.md
 """
+import copy
 import time
 from options.train_options import TrainOptions
 from data import create_dataset
@@ -73,5 +74,28 @@ if __name__ == '__main__':
             print('saving the model at the end of epoch %d, iters %d' % (epoch, total_iters))
             model.save_networks('latest')
             model.save_networks(epoch)
+
+        if epoch % opt.validation_epoch_freq == 0:
+            print('running validation for the model at the end of epoch %d, iters %d' % (epoch, total_iters))
+            val_opt = copy.deepcopy(opt)
+            val_opt.phase = 'val'
+            validation_dataset = create_dataset(val_opt)
+            avg_val_losses = {"G_GAN": 0, "G_L1": 0, "D_real": 0, "D_fake": 0}
+            for i, val_data in enumerate(validation_dataset):
+                if i >= opt.num_test:  # only apply our model to opt.num_test images.
+                    break
+                model.set_input(val_data)  # unpack data from data loader
+                model.test()  # run inference
+
+                pred_fake, pred_real, _ = model.forward_D()
+
+                avg_val_losses["G_GAN"] += model.criterionGAN(pred_fake, True) / opt.num_test
+                avg_val_losses["G_L1"] += model.criterionL1(model.fake_B, model.real_B) * model.opt.lambda_L1 / opt.num_test
+                avg_val_losses["D_real"] += model.criterionGAN(pred_real, True) / opt.num_test
+                avg_val_losses["D_fake"] += model.criterionGAN(pred_fake, False) / opt.num_test
+
+            t_comp = (time.time() - iter_start_time) / opt.batch_size
+            visualizer.print_validation_losses(epoch, epoch_iter, avg_val_losses, t_comp, t_data)
+
 
         print('End of epoch %d / %d \t Time Taken: %d sec' % (epoch, opt.n_epochs + opt.n_epochs_decay, time.time() - epoch_start_time))

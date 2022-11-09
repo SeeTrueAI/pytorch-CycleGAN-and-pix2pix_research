@@ -22,6 +22,7 @@ class TrainOptions(BaseOptions):
         # network saving and loading parameters
         parser.add_argument('--save_latest_freq', type=int, default=5000, help='frequency of saving the latest results')
         parser.add_argument('--save_epoch_freq', type=int, default=5, help='frequency of saving checkpoints at the end of epochs')
+        parser.add_argument('--validation_epoch_freq', type=int, default=10, help='frequency of running validation')
         parser.add_argument('--save_by_iter', action='store_true', help='whether saves model by iteration')
         parser.add_argument('--continue_train', action='store_true', help='continue training: load the latest model')
         parser.add_argument('--epoch_count', type=int, default=1, help='the starting epoch count, we save the model by <epoch_count>, <epoch_count>+<save_latest_freq>, ...')
@@ -35,6 +36,10 @@ class TrainOptions(BaseOptions):
         parser.add_argument('--pool_size', type=int, default=50, help='the size of image buffer that stores previously generated images')
         parser.add_argument('--lr_policy', type=str, default='linear', help='learning rate policy. [linear | step | plateau | cosine]')
         parser.add_argument('--lr_decay_iters', type=int, default=50, help='multiply by a gamma every lr_decay_iters iterations')
-
+        parser.add_argument('--g_train_factor', type=int, default=1, help='g trains g_train_factor iterations on every d iteration')
+        parser.add_argument('--forward_loss', action='store_true', help='whether or not to use forward loss in cycleGAN')
+        parser.add_argument('--num_test', type=int, default=100,
+                            help='number of images to run validation on')
+        parser.add_argument('--show_debug', action='store_true', help='whether or not to show debug images')
         self.isTrain = True
         return parser
