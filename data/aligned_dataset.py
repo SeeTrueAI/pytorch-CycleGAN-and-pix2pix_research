@@ -2,6 +2,7 @@ import os
 from data.base_dataset import BaseDataset, get_params, get_transform
 from data.image_folder import make_dataset
 from PIL import Image
+import torch
 
 
 class AlignedDataset(BaseDataset):
@@ -39,12 +40,18 @@ class AlignedDataset(BaseDataset):
         # read a image given a random integer index
         AB_path = self.AB_paths[index]
         AB = Image.open(AB_path).convert('RGB')
-        # split AB image into A and B
         w, h = AB.size
-        w2 = int(w / 2)
-        A = AB.crop((0, 0, w2, h))
-        B = AB.crop((w2, 0, w, h))
-
+        C = None
+        if self.opt.input_nc == 6:
+            w3 = int(w / 3)
+            A = AB.crop((0, 0, w3, h))
+            B = AB.crop((w3, 0, w3 * 2, h))
+            C = AB.crop((w3 * 2, 0, w, h))
+        else:
+            # split AB image into A and B
+            w2 = int(w / 2)
+            A = AB.crop((0, 0, w2, h))
+            B = AB.crop((w2, 0, w, h))
         # apply the same transform to both A and B
         transform_params = get_params(self.opt, A.size)
         A_transform = get_transform(self.opt, transform_params, grayscale=(self.input_nc == 1))
@@ -52,6 +59,9 @@ class AlignedDataset(BaseDataset):
 
         A = A_transform(A)
         B = B_transform(B)
+        if self.opt.input_nc == 6:
+            C = B_transform(C)
+            B = torch.cat((B, C))
 
         return {'A': A, 'B': B, 'A_paths': AB_path, 'B_paths': AB_path}
 
