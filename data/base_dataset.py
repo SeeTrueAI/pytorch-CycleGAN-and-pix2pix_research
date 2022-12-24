@@ -73,12 +73,14 @@ def get_params(opt, size):
     x = random.randint(0, np.maximum(0, new_w - opt.crop_size))
     y = random.randint(0, np.maximum(0, new_h - opt.crop_size))
 
+    theta = random.randint(0, 360)
+
     flip = random.random() > 0.5
 
-    return {'crop_pos': (x, y), 'flip': flip}
+    return {'crop_pos': (x, y), 'flip': flip, 'theta': theta}
 
 
-def get_transform(opt, params=None, grayscale=False, method=transforms.InterpolationMode.BICUBIC, convert=True):
+def get_transform(opt, params=None, grayscale=False, method=Image.BICUBIC, convert=True):
     transform_list = []
     if grayscale:
         transform_list.append(transforms.Grayscale(1))
@@ -87,6 +89,12 @@ def get_transform(opt, params=None, grayscale=False, method=transforms.Interpola
         transform_list.append(transforms.Resize(osize, method))
     elif 'scale_width' in opt.preprocess:
         transform_list.append(transforms.Lambda(lambda img: __scale_width(img, opt.load_size, opt.crop_size, method)))
+
+    if 'rotate' in opt.preprocess:
+        if params is None:
+            transform_list.append(transforms.RandomRotation)
+        else:
+            transform_list.append(transforms.Lambda(lambda img: __rotate(img, params['theta'])))
 
     if 'crop' in opt.preprocess:
         if params is None:
@@ -112,16 +120,7 @@ def get_transform(opt, params=None, grayscale=False, method=transforms.Interpola
     return transforms.Compose(transform_list)
 
 
-def __transforms2pil_resize(method):
-    mapper = {transforms.InterpolationMode.BILINEAR: Image.BILINEAR,
-              transforms.InterpolationMode.BICUBIC: Image.BICUBIC,
-              transforms.InterpolationMode.NEAREST: Image.NEAREST,
-              transforms.InterpolationMode.LANCZOS: Image.LANCZOS,}
-    return mapper[method]
-
-
-def __make_power_2(img, base, method=transforms.InterpolationMode.BICUBIC):
-    method = __transforms2pil_resize(method)
+def __make_power_2(img, base, method=Image.BICUBIC):
     ow, oh = img.size
     h = int(round(oh / base) * base)
     w = int(round(ow / base) * base)
@@ -132,8 +131,7 @@ def __make_power_2(img, base, method=transforms.InterpolationMode.BICUBIC):
     return img.resize((w, h), method)
 
 
-def __scale_width(img, target_size, crop_size, method=transforms.InterpolationMode.BICUBIC):
-    method = __transforms2pil_resize(method)
+def __scale_width(img, target_size, crop_size, method=Image.BICUBIC):
     ow, oh = img.size
     if ow == target_size and oh >= crop_size:
         return img
@@ -149,6 +147,10 @@ def __crop(img, pos, size):
     if (ow > tw or oh > th):
         return img.crop((x1, y1, x1 + tw, y1 + th))
     return img
+
+
+def __rotate(img, theta):
+    return img.rotate(theta, resample=Image.BILINEAR, fillcolor=(255, 255, 255), expand=1)
 
 
 def __flip(img, flip):
