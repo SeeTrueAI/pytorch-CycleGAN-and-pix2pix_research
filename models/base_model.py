@@ -71,6 +71,12 @@ class BaseModel(ABC):
         pass
 
     @abstractmethod
+    def forward_D(self):
+        """Run forward pass and also Desicriminator forward pass. Used for Debug
+        """
+        pass
+
+    @abstractmethod
     def optimize_parameters(self):
         """Calculate losses, gradients, and update network weights; called in every training iteration"""
         pass
@@ -108,9 +114,9 @@ class BaseModel(ABC):
     def test_with_d(self):
         """Forward function plus discriminator loss used in test time.
 
-                This function wraps <forward> function in no_grad() so we don't save intermediate steps for backprop
-                It also calls <compute_visuals> to produce additional visualization results
-                """
+            This function wraps <forward> function in no_grad() so we don't save intermediate steps for backprop
+            It also calls <compute_visuals> to produce additional visualization results
+        """
         with torch.no_grad():
             self.forward()
             self.forward_D()

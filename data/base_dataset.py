@@ -91,6 +91,12 @@ def get_transform(opt, params=None, grayscale=False, method=Image.BICUBIC, conve
         transform_list.append(transforms.Lambda(lambda img: __scale_width(img, opt.load_size, opt.crop_size, method)))
 
     if 'rotate' in opt.preprocess:
+        """
+        if the string rotate appears in the preprocess string then either apply 
+        a random rotation or a specific angle rotation based on parameter theta (depending if params exist or if it is None)
+        in case of pix2pix, the augmentation of input (or 2 inputs) must be aligned with that of output and hence 
+        we will use params['theta'] and not a random angle
+        """
         if params is None:
             transform_list.append(transforms.RandomRotation)
         else:
@@ -150,6 +156,9 @@ def __crop(img, pos, size):
 
 
 def __rotate(img, theta):
+    """
+    rotation will always use bilinear interpolation and will add white padding
+    """
     return img.rotate(theta, resample=Image.BILINEAR, fillcolor=(255, 255, 255), expand=1)
 
 

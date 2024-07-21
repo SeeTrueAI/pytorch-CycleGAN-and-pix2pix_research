@@ -1,9 +1,6 @@
 import torch
 from .base_model import BaseModel
 from . import networks
-import torch.nn.functional as F
-import torchvision.transforms.functional as VF
-import numpy as np
 
 UNET_SIZE = 256
 
@@ -86,7 +83,6 @@ class Pix2PixModel(BaseModel):
         The option 'direction' can be used to swap images in domain A and domain B.
         """
         AtoB = self.opt.direction == 'AtoB'
-        # self.mask = input['MASK'].to(self.device)
         self.real_A = input['A' if AtoB else 'B'].to(self.device)
         self.real_B = input['B' if AtoB else 'A'].to(self.device)
         self.image_paths = input['A_paths' if AtoB else 'B_paths']
@@ -94,33 +90,6 @@ class Pix2PixModel(BaseModel):
     def forward(self):
         """Run forward pass; called by both functions <optimize_parameters> and <test>."""
         self.fake_B = self.netG(self.real_A)  # G(A)
-
-    # def forward(self):
-    #     """Run forward pass; called by both functions <optimize_parameters> and <test>."""
-    #     img_dims = np.array(self.real_A.size()[-2:])
-    #     final_dims = np.ceil(img_dims / UNET_SIZE) * UNET_SIZE
-    #
-    #     x_diff = int(final_dims[1] - img_dims[1])
-    #     left = int(x_diff / 2)
-    #     right = x_diff - left
-    #
-    #     y_diff = int(final_dims[0] - img_dims[0])
-    #     top = int(y_diff / 2)
-    #     bottom = y_diff - top
-    #
-    #     pad_dims = tuple(np.array([left, right, top, bottom]))
-    #     self.real_A = F.pad(self.real_A, pad_dims, 'constant', 0)
-    #     self.fake_B = self.netG(self.real_A)  # G(A)
-    #     self.fake_B = VF.crop(self.fake_B, top, left, img_dims[0], img_dims[1])
-
-    # def forward(self):
-    #     """Run forward pass; called by both functions <optimize_parameters> and <test>."""
-    #     org_dims = np.array(self.real_A.size()[-2:])
-    #     unet_dims = tuple((np.ceil(org_dims / UNET_SIZE) * UNET_SIZE).astype(int))
-    #
-    #     self.real_A = VF.resize(self.real_A, size=unet_dims)
-    #     self.fake_B = self.netG(self.real_A)  # G(A)
-    #     self.fake_B = VF.resize(self.fake_B, size=tuple(org_dims))
 
     def backward_D(self):
         """Calculate GAN loss for the discriminator"""
@@ -155,13 +124,7 @@ class Pix2PixModel(BaseModel):
         pred_fake = self.netD(fake_AB)
         self.loss_G_GAN = self.criterionGAN(pred_fake, True)
         # Second, G(A) = B
-        if self.opt.forward_loss:
-            self.loss_G_L1 = self.criterionL1(self.fake_B, self.real_A) * self.opt.lambda_L1
-        # elif self.opt.masked_loss:
-        #     self.loss_G_L1 = self.criterionL1(torch.multiply(self.fake_B, self.mask),
-        #                                       torch.multiply(self.real_A, self.mask)) * self.opt.lambda_L1
-        else:
-            self.loss_G_L1 = self.criterionL1(self.fake_B, self.real_B) * self.opt.lambda_L1
+        self.loss_G_L1 = self.criterionL1(self.fake_B, self.real_B) * self.opt.lambda_L1
         # combine loss and calculate gradients
         self.loss_G = self.loss_G_GAN + self.loss_G_L1
         self.loss_G.backward(retain_graph=retain_graph)

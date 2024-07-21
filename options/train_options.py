@@ -37,7 +37,6 @@ class TrainOptions(BaseOptions):
         parser.add_argument('--lr_policy', type=str, default='linear', help='learning rate policy. [linear | step | plateau | cosine]')
         parser.add_argument('--lr_decay_iters', type=int, default=50, help='multiply by a gamma every lr_decay_iters iterations')
         parser.add_argument('--g_train_factor', type=int, default=1, help='g trains g_train_factor iterations on every d iteration')
-        parser.add_argument('--forward_loss', action='store_true', help='whether or not to use forward loss in cycleGAN')
         parser.add_argument('--num_test', type=int, default=100,
                             help='number of images to run validation on')
         parser.add_argument('--show_debug', action='store_true', help='whether or not to show debug images')

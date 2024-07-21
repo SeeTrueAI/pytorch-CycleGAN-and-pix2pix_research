@@ -27,25 +27,15 @@ See training and test tips at: https://github.com/junyanz/pytorch-CycleGAN-and-p
 See frequently asked questions at: https://github.com/junyanz/pytorch-CycleGAN-and-pix2pix/blob/master/docs/qa.md
 """
 import os
-
-import cv2
-
 from options.test_options import TestOptions
 from options.train_options import TrainOptions
 from data import create_dataset
 from models import create_model
 from util.visualizer import save_images
 from util import html
-from datetime import datetime
-import io
-import itertools
-import tensorflow as tf
-from tensorflow import keras
 import matplotlib.pyplot as plt
 import numpy as np
-import sklearn.metrics
-from models import networks
-import torch
+import cv2
 
 try:
     import wandb

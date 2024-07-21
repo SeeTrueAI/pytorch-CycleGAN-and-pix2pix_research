@@ -47,11 +47,22 @@ class AlignedDataset(BaseDataset):
             A = AB.crop((0, 0, w3, h))
             B = AB.crop((w3, 0, w3 * 2, h))
             C = AB.crop((w3 * 2, 0, w, h))
+            """
+            If input_nc (number of input channels) is 6 (i.e. input should be 2 concatenated rgb images instead of 1),
+             then image width is one third of the total input width.
+              The first third (pixels 0: w3) is image A which should be the output, 
+              the 2nd third (pixels w3: 2*w3) is input image 1 and the third (2*w3: w) is input image number 2. 
+            """
         else:
             # split AB image into A and B
             w2 = int(w / 2)
             A = AB.crop((0, 0, w2, h))
             B = AB.crop((w2, 0, w, h))
+            """
+            This applies the augmentation transform on the 2nd input image ('C') 
+            and then concatenates both input images ('C' and ‘B') 
+            into one 6 channelled image (which will be called 'B’ as before)
+            """
         # apply the same transform to both A and B
         transform_params = get_params(self.opt, A.size)
         A_transform = get_transform(self.opt, transform_params, grayscale=(self.input_nc == 1))
