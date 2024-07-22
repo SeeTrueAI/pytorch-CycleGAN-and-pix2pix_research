@@ -97,27 +97,43 @@ def main():
     plt.subplot(221)
     plt.title("g_gan")
     plt.plot(np.array(iters), np.array(g_gans), 'b-')
-    plt.plot(np.array(iters_v), np.array(g_gans_v), 'r-')
     plt.grid()
 
     plt.subplot(222)
     plt.title("g_l1")
     plt.plot(np.array(iters), np.array(g_l1s), 'b-')
-    plt.plot(np.array(iters_v), np.array(g_l1s_v), 'r-')
     plt.grid()
 
     plt.subplot(223)
     plt.title("d_real")
     plt.plot(np.array(iters), np.array(d_reals), 'b-')
-    plt.plot(np.array(iters_v), np.array(d_reals_v), 'r-')
     plt.grid()
 
     plt.subplot(224)
     plt.title("d_fake")
     plt.plot(np.array(iters), np.array(d_fakes), 'b-')
-    plt.plot(np.array(iters_v), np.array(d_fakes_v), 'r-')
-
     plt.grid()
+
+    if len(iters_v) != 0:
+        plt.subplot(221)
+        plt.title("g_gan")
+        plt.plot(np.array(iters_v), np.array(g_gans_v), 'r-')
+        plt.legend(["train", "validation"])
+
+        plt.subplot(222)
+        plt.title("g_l1")
+        plt.plot(np.array(iters_v), np.array(g_l1s_v), 'r-')
+        plt.legend(["train", "validation"])
+
+        plt.subplot(223)
+        plt.title("d_real")
+        plt.plot(np.array(iters_v), np.array(d_reals_v), 'r-')
+        plt.legend(["train", "validation"])
+
+        plt.subplot(224)
+        plt.title("d_fake")
+        plt.plot(np.array(iters_v), np.array(d_fakes_v), 'r-')
+        plt.legend(["train", "validation"])
 
     plt.show()
 
