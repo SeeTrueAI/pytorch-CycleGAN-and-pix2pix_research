@@ -3,6 +3,11 @@ url = "https://pypi.org/simple"
 verify_ssl = true
 name = "pypi"
 
+[[source]]
+name = "nexus"
+url = "http://devs:Qq12131415!@nexus.int.seetrue.ai:8081/repository/python/simple"
+verify_ssl = false
+
 [packages]
 torch = ">=1.4.0"
 torchvision = ">=0.5.0"
@@ -13,6 +18,7 @@ matplotlib = "*"
 packaging = "*"
 psutil = "*"
 pyyaml = "*"
+seetrue-infra = {index = "nexus", version = "~=0.1.5"}
 
 [dev-packages]
 

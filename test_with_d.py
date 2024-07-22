@@ -97,7 +97,7 @@ if __name__ == '__main__':
             break
         model.set_input(data)  # unpack data from data loader
         model.test()           # run inference
-        pred_fake, pred_real, _ = model.forward_D()
+        pred_fake, pred_real = model.forward_D()
         avg_test_losses["G_GAN"] += model.criterionGAN(pred_fake, True) / opt.num_test
         avg_test_losses["G_L1"] += model.criterionL1(model.fake_B, model.real_B) / opt.num_test
         avg_test_losses["D_real"] += model.criterionGAN(pred_real, True) / opt.num_test
