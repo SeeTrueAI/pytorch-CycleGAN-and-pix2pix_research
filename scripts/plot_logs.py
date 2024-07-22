@@ -20,6 +20,12 @@ def setup():
 
 def main():
     setup()
+    """
+    This script parses the lines in the losses log (text file) and plots the evolution of train losses over train
+     (i.e. along iterations). If validation losses were calculated then those will be parsed and plotted as well.
+    num_images_in_train is necessary for keeping a continuous iteration count across epochs 
+    (so that the plot will not jump after each epoch) 
+    """
 
     with open(Setup.pargs.log_file, "r") as f:
         all_lines = f.readlines()
