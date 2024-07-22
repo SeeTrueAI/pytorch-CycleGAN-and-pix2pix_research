@@ -19,6 +19,7 @@ packaging = "*"
 psutil = "*"
 pyyaml = "*"
 seetrue-infra = {index = "nexus", version = "~=0.1.5"}
+opencv-python = {index = "pypi", version = "==4.5.5.62"}
 
 [dev-packages]
 
