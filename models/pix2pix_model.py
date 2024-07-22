@@ -112,8 +112,6 @@ class Pix2PixModel(BaseModel):
         pred_fake = self.netD(fake_AB.detach())
         real_AB = torch.cat((self.real_A, self.real_B), 1)
         pred_real = self.netD(real_AB)
-        # real_AA = torch.cat((self.real_A, self.real_A), 1)
-        # pred_input = self.netD(real_AA)
 
         return pred_fake, pred_real
 
