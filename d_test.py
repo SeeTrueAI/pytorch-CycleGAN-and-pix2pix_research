@@ -33,9 +33,11 @@ from data import create_dataset
 from models import create_model
 from util.visualizer import save_images
 from util import html
-import matplotlib.pyplot as plt
 import numpy as np
 import cv2
+
+DEBUG_IMAGES = "debug_images_discriminator"
+DEBUG_IMAGES_2 = "debug_images_diffs"
 
 try:
     import wandb
@@ -104,50 +106,67 @@ if __name__ == '__main__':
         avg_test_losses["D_fake"] += model.criterionGAN(pred_fake, False) / opt.num_test
 
         if opt.show_debug:
+            debug_folder = os.path.join(os.path.join(opt.results_dir, opt.name), DEBUG_IMAGES)
+            debug_folder_2 = os.path.join(os.path.join(opt.results_dir, opt.name), DEBUG_IMAGES_2)
+            os.makedirs(debug_folder, exist_ok=True)
+            os.makedirs(debug_folder_2, exist_ok=True)
+
             pred_fake_img = pred_fake.cpu().detach().numpy()
             h, w = pred_fake_img.shape[2:]
-            pred_fake_img = np.abs(np.reshape(pred_fake_img, (h, w)))
-            pred_real_img = np.abs(np.reshape(pred_real.cpu().detach().numpy(), (h, w)))
+            pred_fake_img = np.reshape(pred_fake_img, (h, w))
+            pred_real_img = np.reshape(pred_real.cpu().detach().numpy(), (h, w))
+
+            min_fake = np.min(pred_fake_img)
+            max_fake = np.max(pred_fake_img)
+            min_abs_fake = min(abs(min_fake), abs(max_fake))
+            if min_abs_fake == max_fake:
+                pred_fake_img = -pred_fake_img + max_fake
+            else:
+                pred_fake_img = pred_fake_img - min_fake
+
+            min_real = np.min(pred_real_img)
+            max_real = np.max(pred_real_img)
+            min_abs_real = min(abs(min_real), abs(max_real))
+            if min_abs_real == max_real:
+                pred_real_img = -pred_real_img + max_real
+            else:
+                pred_real_img = pred_real_img - min_real
+
+            global_max = max(np.max(pred_real_img), np.max(pred_fake_img))
+
             fake_B_img = np.moveaxis(model.fake_B.cpu().detach().numpy()[0], 0, -1)
             real_B_img = np.moveaxis(model.real_B.cpu().detach().numpy()[0], 0, -1)
 
-            fake01 = 0.5 * (fake_B_img + 1)
-            real01 = 0.5 * (real_B_img + 1)
+            big_h, big_w, _ = fake_B_img.shape
 
-            fake_Lab = cv2.cvtColor(fake01, cv2.COLOR_RGB2Lab)
-            real_Lab = cv2.cvtColor(real01, cv2.COLOR_RGB2Lab)
+            fake01 = cv2.cvtColor(np.uint8(255 * 0.5 * (fake_B_img + 1)), cv2.COLOR_BGR2RGB)
+            real01 = cv2.cvtColor(np.uint8(255 * 0.5 * (real_B_img + 1)), cv2.COLOR_BGR2RGB)
 
-            plt.figure(0)
-            plt.subplot(221)
-            plt.imshow(fake01)
-            plt.title('fake')
-            plt.subplot(222)
-            plt.imshow(pred_fake_img)
-            plt.title('discriminator of fake')
-            plt.clim(-25, 25)
-            plt.subplot(223)
-            plt.imshow(real01)
-            plt.title('real')
-            plt.subplot(224)
-            plt.imshow(pred_real_img)
-            plt.title('discriminator of real')
-            plt.clim(-25, 25)
+            pred_fake_img = np.uint8(255 * pred_fake_img/global_max)
+            pred_real_img = np.uint8(255 * pred_real_img/global_max)
 
-            plt.figure(1)
-            plt.subplot(131)
-            plt.imshow(fake_Lab[:, :, 0] - real_Lab[:, :, 0])
-            plt.clim(-64, 64)
-            plt.title('L diff')
-            plt.subplot(132)
-            plt.imshow(fake_Lab[:, :, 1] - real_Lab[:, :, 1])
-            plt.clim(-64, 64)
-            plt.title('a diff')
-            plt.subplot(133)
-            plt.imshow(fake_Lab[:, :, 2] - real_Lab[:, :, 2])
-            plt.clim(-64, 64)
-            plt.title('b diff')
+            fake_hls = cv2.cvtColor(fake01, cv2.COLOR_RGB2HLS)
+            real_hls = cv2.cvtColor(real01, cv2.COLOR_RGB2HLS)
 
-            plt.show()
+            combined_img_discriminator = np.zeros((h * 2, w * 2, 3)).astype(np.uint8)
+            combined_img_discriminator[:h, :w, :] = cv2.resize(fake01, (w, h))
+            combined_img_discriminator[:h, w:, :] = np.stack((pred_fake_img, pred_fake_img, pred_fake_img), axis=2)
+            combined_img_discriminator[h:, :w, :] = cv2.resize(real01, (w, h))
+            combined_img_discriminator[h:, w:, :] = np.stack((pred_real_img, pred_real_img, pred_real_img), axis=2)
+
+            cv2.imwrite(os.path.join(debug_folder, os.path.basename(data['A_paths'][0])),
+                        combined_img_discriminator)
+
+            combined_img_diffs = np.zeros((big_h, big_w * 3)).astype(np.uint8)
+            combined_img_diffs[:, :big_w] = np.abs(np.float64(fake_hls[:, :, 0]) - np.float64(real_hls[:, :, 0]))
+            combined_img_diffs[:, big_w: 2* big_w] = np.abs(np.float64(fake_hls[:, :, 1])
+                                                                     - np.float64(real_hls[:, :, 1]))
+            combined_img_diffs[:, 2 * big_w: 3 * big_w] = np.abs(np.float64(fake_hls[:, :, 2])
+                                                                          - np.float64(real_hls[:, :, 2]))
+
+            cv2.imwrite(os.path.join(debug_folder_2, os.path.basename(data['A_paths'][0])),
+                        combined_img_diffs)
+
         visuals = model.get_current_visuals()  # get image results
         img_path = model.get_image_paths()     # get image paths
         if i % 5 == 0:  # save images to an HTML file
