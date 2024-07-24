@@ -104,8 +104,10 @@ if __name__ == '__main__':
         avg_test_losses["D_fake"] += model.criterionGAN(pred_fake, False) / opt.num_test
 
         if opt.show_debug:
-            pred_fake_img = np.reshape(pred_fake.cpu().detach().numpy(), (30, 30))
-            pred_real_img = np.reshape(pred_real.cpu().detach().numpy(), (30, 30))
+            pred_fake_img = pred_fake.cpu().detach().numpy()
+            h, w = pred_fake_img.shape[2:]
+            pred_fake_img = np.abs(np.reshape(pred_fake_img, (h, w)))
+            pred_real_img = np.abs(np.reshape(pred_real.cpu().detach().numpy(), (h, w)))
             fake_B_img = np.moveaxis(model.fake_B.cpu().detach().numpy()[0], 0, -1)
             real_B_img = np.moveaxis(model.real_B.cpu().detach().numpy()[0], 0, -1)
 
