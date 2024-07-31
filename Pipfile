@@ -4,24 +4,61 @@ verify_ssl = true
 name = "pypi"
 
 [[source]]
+name = "pytorch"
+url = "https://download.pytorch.org/whl/cu113"
+verify_ssl = false
+
+[[source]]
 name = "nexus"
 url = "http://devs:Qq12131415!@nexus.int.seetrue.ai:8081/repository/python/simple"
 verify_ssl = false
 
+[[source]]
+name = "nexus-testing"
+url = "http://devs:Qq12131415!@nexus.int.seetrue.ai:8081/repository/python-testing/simple"
+verify_ssl = false
+
 [packages]
-torch = ">=1.4.0"
-torchvision = ">=0.5.0"
-dominate = ">=2.4.0"
-visdom = ">=0.1.8.8"
-wandb = "*"
-matplotlib = "*"
-packaging = "*"
-psutil = "*"
-pyyaml = "*"
-seetrue-infra = {index = "nexus", version = "~=0.1.5"}
+# Packages required for the 'production' part of this repo
+fvcore = {index = "pypi", version = "==0.1.5.post20211023"}
 opencv-python = {index = "pypi", version = "==4.5.5.62"}
-
-[dev-packages]
-
+pycocotools = {index = "pypi", version = "==2.0.6"}
+scikit-image = {index = "pypi", version = "==0.16.2"}
+torch = {index = "pytorch", version = "==1.11+cu113"}
+torchvision = {index = "pytorch", version = "==0.12.0+cu113"}
+pymage-size = "*"
+pydicom = {index = "pypi", version = "==2.3.1"}
+"ruamel.yaml" = "*"
+pandas = "*"
+numba = {index = "pypi", version = "==0.56.4"}
+# SeeTrue packages
+# Notice that i2tpy requires some of the above packages and also both engine and seetrue-infra
+# so pay attention to these in case of dependencies mismatch
+i2tpy = {index = "nexus", version = "~=5.1.4"}
+engine = {version = "==15.4.4",index = "nexus"}
+seetrue-infra = {index = "nexus", version = "~=0.1.5"}
+# detectron2 package is only needed when using this repo as a package so it's probably not required here
+# When working from this repo, we use detectron2 from a submodule
+# detectron2 = {index = "nexus", version = "==0.6+cu113.st.v2.0.0"}
+# This package is a dependency for scikit-image (which requires networkx>=2.0 in version 0.16.x)
+# We set it to this specific version since it's the last one supporting python 3.7
+networkx = {index = "pypi", version = "==2.6.3"}
+# This package is a dependency for detectron2->timm->huggingface-hub->fsspec and we need to use a fixed version of it
+# so it won't be updated automatically when locking to a newer version that requires python >= 3.8
+fsspec = {index = "pypi", version = "==2023.1.0"}
+# Using fixed version for typing-extensions, the last one supporting python 3.7
+# See https://github.com/python/typing_extensions/blob/main/CHANGELOG.md#release-480rc1-september-7-2023
+typing-extensions = {version = "==4.7.1",index = "pypi"}
+# Using fixed version of filelock that supports python 3.7
+filelock = {version = "==3.12.2",index = "pypi"}
+timm = {version = "0.9.7", index = "pypi"}
+einops = {version  = "0.6.1", index = "pypi"}
+# Packages required for 'research'
+# ('detectron2' is always built using its setup.py so its dependencies are not really needed here)
+boto3 = "*"
+pynrrd = "~=0.4.3"
+imagecodecs = {version = "==2021.8.26",index = "pypi"}
+psutil = {version = "==5.9.4",index = "pypi"}
+plotly = "*"
 [requires]
-python_version = "3.7"
+python_version = "3.7.9"
