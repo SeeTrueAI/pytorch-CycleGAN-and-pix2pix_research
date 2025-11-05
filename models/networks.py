@@ -4,7 +4,6 @@ import functools
 from torch.optim import lr_scheduler
 import torch.nn as nn
 import torch.nn.functional as F
-import math
 
 
 ###############################################################################
@@ -120,7 +119,7 @@ def init_net(net, init_type='normal', init_gain=0.02, gpu_ids=[]):
 
 
 def define_G(input_nc, output_nc, ngf, netG, norm='batch', use_dropout=False, init_type='normal', init_gain=0.02,
-             gpu_ids=[], filter_mode=False):
+             gpu_ids=[], predict_delta=False, use_modulated_conv=False, use_upsample=False):
     """Create a generator
 
     Parameters:
@@ -152,16 +151,16 @@ def define_G(input_nc, output_nc, ngf, netG, norm='batch', use_dropout=False, in
 
     if netG == 'resnet_9blocks':
         net = ResnetGenerator(input_nc, output_nc, ngf, norm_layer=norm_layer, use_dropout=use_dropout, n_blocks=9,
-                              filter_mode=filter_mode)
+                              predict_delta=predict_delta, use_modulated_conv=use_modulated_conv, use_upsample=use_upsample)
     elif netG == 'resnet_6blocks':
         net = ResnetGenerator(input_nc, output_nc, ngf, norm_layer=norm_layer, use_dropout=use_dropout, n_blocks=6,
-                              filter_mode=filter_mode)
+                              predict_delta=predict_delta, use_modulated_conv=use_modulated_conv, use_upsample=use_upsample)
     elif netG == 'unet_128':
         net = UnetGenerator(input_nc, output_nc, 7, ngf, norm_layer=norm_layer, use_dropout=use_dropout,
-                            filter_mode=filter_mode)
+                            predict_delta=predict_delta)
     elif netG == 'unet_256':
         net = UnetGenerator(input_nc, output_nc, 8, ngf, norm_layer=norm_layer, use_dropout=use_dropout,
-                            filter_mode=filter_mode)
+                            predict_delta=predict_delta)
     else:
         raise NotImplementedError('Generator model name [%s] is not recognized' % netG)
     return init_net(net, init_type, init_gain, gpu_ids)
@@ -214,13 +213,11 @@ def define_D(input_nc, ndf, netD, n_layers_D=3, norm='batch', init_type='normal'
 ##############################################################################
 # Classes
 ##############################################################################
+# -------------------- ModulatedConv2d --------------------
 class ModulatedConv2d(nn.Module):
-    """
-    Per-sample modulated convolution with optional demodulation (StyleGAN2 style)
-    Designed to replace standard Conv2d in generator upsampling blocks
-    """
-
-    def __init__(self, in_channels, out_channels, kernel_size, demodulate=True, stride=1, padding=1, bias=True):
+    """Per-sample modulated convolution (StyleGAN2-like)."""
+    def __init__(self, in_channels, out_channels, kernel_size, demodulate=True,
+                 stride=1, padding=1, bias=True):
         super().__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
@@ -229,38 +226,55 @@ class ModulatedConv2d(nn.Module):
         self.padding = padding
         self.demodulate = demodulate
 
-        # Standard convolution weight, will be modulated per-sample
         self.weight = nn.Parameter(torch.randn(1, out_channels, in_channels, kernel_size, kernel_size))
-        if bias:
-            self.bias = nn.Parameter(torch.zeros(out_channels))
-        else:
-            self.bias = None
+        self.bias = nn.Parameter(torch.zeros(out_channels)) if bias else None
 
     def forward(self, x, style):
-        """
-        x: [batch, in_channels, H, W]
-        style: [batch, in_channels] — per-sample scaling of channels
-        """
         batch, in_c, h, w = x.shape
-        # 1. Modulate
-        weight = self.weight * (style[:, None, :, None, None] + 1.0)  # broadcasting style
-
-        # 2. Demodulate
+        # Modulate weights
+        weight = self.weight * (style[:, None, :, None, None] + 1.0)
+        # Demodulate
         if self.demodulate:
-            # Calculate per-sample, per-output-channel std
             d = torch.rsqrt((weight ** 2).sum([2, 3, 4]) + 1e-8)
             weight = weight * d[:, :, None, None, None]
-
-        # 3. Reshape for group conv trick (batch as group)
+        # Group convolution trick
         x = x.view(1, -1, h, w)
         weight = weight.view(-1, in_c, self.kernel_size, self.kernel_size)
         out = F.conv2d(x, weight, bias=None, stride=self.stride, padding=self.padding, groups=batch)
         out = out.view(batch, self.out_channels, out.shape[-2], out.shape[-1])
-
         if self.bias is not None:
             out = out + self.bias[None, :, None, None]
-
         return out
+
+
+# -------------------- UpsampleBlock --------------------
+class UpsampleBlock(nn.Module):
+    """Upsample + Conv2d or ModulatedConv2d + Norm + ReLU"""
+    def __init__(self, in_channels, out_channels, norm_layer=nn.InstanceNorm2d,
+                 use_modulated_conv=False):
+        super().__init__()
+        self.use_modulated_conv = use_modulated_conv
+
+        self.upsample = nn.Upsample(scale_factor=2, mode='nearest')
+
+        if use_modulated_conv:
+            self.conv = ModulatedConv2d(in_channels, out_channels, kernel_size=3, padding=1)
+        else:
+            self.conv = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1)
+
+        self.norm = norm_layer(out_channels)
+        self.relu = nn.ReLU(True)
+
+    def forward(self, x):
+        x = self.upsample(x)
+        if self.use_modulated_conv:
+            style = torch.ones(x.shape[0], x.shape[1], device=x.device)
+            x = self.conv(x, style)
+        else:
+            x = self.conv(x)
+        x = self.norm(x)
+        x = self.relu(x)
+        return x
 
 class GANLoss(nn.Module):
     """Define different GAN objectives.
@@ -368,40 +382,22 @@ def cal_gradient_penalty(netD, real_data, fake_data, device, type='mixed', const
         return 0.0, None
 
 
-# --- Define UpsampleBlock properly ---
-class UpsampleBlock(nn.Module):
-    def __init__(self, in_channels, out_channels):
-        super().__init__()
-        self.upsample = nn.Upsample(scale_factor=2, mode='nearest')
-        # Instead of Conv2d, use modulated conv
-        self.conv = ModulatedConv2d(in_channels, out_channels, kernel_size=3, padding=1)
-
-        self.norm = nn.InstanceNorm2d(out_channels)
-        self.relu = nn.ReLU(True)
-
-    def forward(self, x):
-        x = self.upsample(x)
-
-        # Create a dummy "style" per sample: ones or learnable (simplest: ones)
-        # Shape: [batch, in_channels]
-        style = torch.ones(x.shape[0], x.shape[1], device=x.device)
-        x = self.conv(x, style)
-
-        x = self.norm(x)
-        x = self.relu(x)
-        return x
-
-
-
-# --- Your fixed ResnetGenerator ---
+# -------------------- ResnetGenerator --------------------
 class ResnetGenerator(nn.Module):
-    """Resnet-based generator with bilinear upsampling (no checkerboard artifacts)."""
+    """Resnet-based generator with configurable upsampling and modulation."""
 
-    def __init__(self, input_nc, output_nc, ngf=64, norm_layer=nn.BatchNorm2d,
-                 use_dropout=False, n_blocks=6, padding_type='reflect', filter_mode=False):
-        assert(n_blocks >= 0)
+    def __init__(self, input_nc, output_nc, ngf=64, norm_layer=nn.InstanceNorm2d,
+                 use_dropout=False, n_blocks=6, padding_type='reflect',
+                 predict_delta=False, use_upsample=True, use_modulated_conv=False):
+        """
+        Args:
+            use_upsample (bool): If True, use UpsampleBlock. If False, use ConvTranspose2d.
+            use_modulated_conv (bool): If True, use ModulatedConv2d inside UpsampleBlock.
+        """
         super().__init__()
-        self.filter_mode = filter_mode
+        self.predict_delta = predict_delta
+        self.use_upsample = use_upsample
+        self.use_modulated_conv = use_modulated_conv
 
         if type(norm_layer) == functools.partial:
             use_bias = norm_layer.func == nn.InstanceNorm2d
@@ -415,7 +411,7 @@ class ResnetGenerator(nn.Module):
             nn.ReLU(True)
         ]
 
-        # downsampling
+        # Downsampling
         n_downsampling = 2
         for i in range(n_downsampling):
             mult = 2 ** i
@@ -428,20 +424,25 @@ class ResnetGenerator(nn.Module):
         # ResNet blocks
         mult = 2 ** n_downsampling
         for i in range(n_blocks):
-            model += [ResnetBlock(ngf * mult, padding_type=padding_type,
-                                  norm_layer=norm_layer,
-                                  use_dropout=use_dropout,
-                                  use_bias=use_bias)]
+            model += [ResnetBlock(ngf * mult, padding_type, norm_layer, use_dropout, use_bias)]
 
-        # ✅ upsampling (REPLACED ConvTranspose2d with UpsampleBlock)
+        # Upsampling (configurable)
         for i in range(n_downsampling):
             mult = 2 ** (n_downsampling - i)
-            model += [
-                UpsampleBlock(ngf * mult, int(ngf * mult / 2)),
-                norm_layer(int(ngf * mult / 2)),
-                nn.ReLU(True)
-            ]
+            if use_upsample:
+                model += [UpsampleBlock(ngf * mult, ngf * mult // 2,
+                                        norm_layer=norm_layer,
+                                        use_modulated_conv=use_modulated_conv)]
+            else:
+                model += [
+                    nn.ConvTranspose2d(ngf * mult, ngf * mult // 2,
+                                       kernel_size=3, stride=2,
+                                       padding=1, output_padding=1, bias=use_bias),
+                    norm_layer(ngf * mult // 2),
+                    nn.ReLU(True)
+                ]
 
+        # Output layer
         model += [
             nn.ReflectionPad2d(3),
             nn.Conv2d(ngf, output_nc, kernel_size=7, padding=0),
@@ -451,49 +452,28 @@ class ResnetGenerator(nn.Module):
         self.model = nn.Sequential(*model)
 
     def forward(self, x):
-        if self.filter_mode:
-            y = self.model(x)
-            # make sure shapes match
+        y = self.model(x)
+        if self.predict_delta:
+            # residual-like mode
             if y.size() != x.size():
-                # crop or pad to match
-                diffY = y.size(2) - x.size(2)
-                diffX = y.size(3) - x.size(3)
-
+                diffY, diffX = y.size(2) - x.size(2), y.size(3) - x.size(3)
                 if diffY > 0 or diffX > 0:
-                    y = y[:, :, diffY // 2:y.size(2) - (diffY - diffY // 2),
-                    diffX // 2:y.size(3) - (diffX - diffX // 2)]
+                    y = y[:, :, diffY // 2 : y.size(2) - (diffY - diffY // 2),
+                           diffX // 2 : y.size(3) - (diffX - diffX // 2)]
                 elif diffY < 0 or diffX < 0:
-                    y = F.pad(y, (abs(diffX) // 2, abs(diffX) - abs(diffX) // 2,
-                                  abs(diffY) // 2, abs(diffY) - abs(diffY) // 2))
+                    y = F.pad(y, (abs(diffX)//2, abs(diffX)-abs(diffX)//2,
+                                  abs(diffY)//2, abs(diffY)-abs(diffY)//2))
             return torch.clamp(x + y, -1, 1)
-        return self.model(x)
+        return y
 
+# -------------------- ResnetBlock --------------------
 class ResnetBlock(nn.Module):
-    """Define a Resnet block"""
-
+    """A standard ResNet block."""
     def __init__(self, dim, padding_type, norm_layer, use_dropout, use_bias):
-        """Initialize the Resnet block
-
-        A resnet block is a conv block with skip connections
-        We construct a conv block with build_conv_block function,
-        and implement skip connections in <forward> function.
-        Original Resnet paper: https://arxiv.org/pdf/1512.03385.pdf
-        """
-        super(ResnetBlock, self).__init__()
+        super().__init__()
         self.conv_block = self.build_conv_block(dim, padding_type, norm_layer, use_dropout, use_bias)
 
     def build_conv_block(self, dim, padding_type, norm_layer, use_dropout, use_bias):
-        """Construct a convolutional block.
-
-        Parameters:
-            dim (int)           -- the number of channels in the conv layer.
-            padding_type (str)  -- the name of padding layer: reflect | replicate | zero
-            norm_layer          -- normalization layer
-            use_dropout (bool)  -- if use dropout layers.
-            use_bias (bool)     -- if the conv layer uses bias or not
-
-        Returns a conv block (with a conv layer, a normalization layer, and a non-linearity layer (ReLU))
-        """
         conv_block = []
         p = 0
         if padding_type == 'reflect':
@@ -502,37 +482,29 @@ class ResnetBlock(nn.Module):
             conv_block += [nn.ReplicationPad2d(1)]
         elif padding_type == 'zero':
             p = 1
-        else:
-            raise NotImplementedError('padding [%s] is not implemented' % padding_type)
 
         conv_block += [nn.Conv2d(dim, dim, kernel_size=3, padding=p, bias=use_bias), norm_layer(dim), nn.ReLU(True)]
         if use_dropout:
             conv_block += [nn.Dropout(0.5)]
 
-        p = 0
         if padding_type == 'reflect':
             conv_block += [nn.ReflectionPad2d(1)]
         elif padding_type == 'replicate':
             conv_block += [nn.ReplicationPad2d(1)]
         elif padding_type == 'zero':
             p = 1
-        else:
-            raise NotImplementedError('padding [%s] is not implemented' % padding_type)
-        conv_block += [nn.Conv2d(dim, dim, kernel_size=3, padding=p, bias=use_bias), norm_layer(dim)]
 
+        conv_block += [nn.Conv2d(dim, dim, kernel_size=3, padding=p, bias=use_bias), norm_layer(dim)]
         return nn.Sequential(*conv_block)
 
     def forward(self, x):
-        """Forward function (with skip connections)"""
-        out = x + self.conv_block(x)  # add skip connections
-        return out
-
+        return x + self.conv_block(x)
 
 class UnetGenerator(nn.Module):
     """Create a Unet-based generator"""
 
     def __init__(self, input_nc, output_nc, num_downs, ngf=64, norm_layer=nn.BatchNorm2d, use_dropout=False,
-                 filter_mode=False):
+                 predict_delta=False):
         """Construct a Unet generator
         Parameters:
             input_nc (int)  -- the number of channels in input images
@@ -547,7 +519,7 @@ class UnetGenerator(nn.Module):
         """
         super(UnetGenerator, self).__init__()
         # construct unet structure
-        self.filter_mode = filter_mode
+        self.predict_delta = predict_delta
         unet_block = UnetSkipConnectionBlock(ngf * 8, ngf * 8, input_nc=None, submodule=None, norm_layer=norm_layer, innermost=True)  # add the innermost layer
         for i in range(num_downs - 5):          # add intermediate layers with ngf * 8 filters
             unet_block = UnetSkipConnectionBlock(ngf * 8, ngf * 8, input_nc=None, submodule=unet_block, norm_layer=norm_layer, use_dropout=use_dropout)
@@ -557,11 +529,21 @@ class UnetGenerator(nn.Module):
         unet_block = UnetSkipConnectionBlock(ngf, ngf * 2, input_nc=None, submodule=unet_block, norm_layer=norm_layer)
         self.model = UnetSkipConnectionBlock(output_nc, ngf, input_nc=input_nc, submodule=unet_block, outermost=True, norm_layer=norm_layer)  # add the outermost layer
 
-    def forward(self, input):
+    def forward(self, x):
         """Standard forward"""
-        if self.filter_mode:
-            return torch.clamp(input + self.model(input), -1, 1)
-        return self.model(input)
+        y = self.model(x)
+        if self.predict_delta:
+            # residual-like mode
+            if y.size() != x.size():
+                diffY, diffX = y.size(2) - x.size(2), y.size(3) - x.size(3)
+                if diffY > 0 or diffX > 0:
+                    y = y[:, :, diffY // 2: y.size(2) - (diffY - diffY // 2),
+                    diffX // 2: y.size(3) - (diffX - diffX // 2)]
+                elif diffY < 0 or diffX < 0:
+                    y = F.pad(y, (abs(diffX) // 2, abs(diffX) - abs(diffX) // 2,
+                                  abs(diffY) // 2, abs(diffY) - abs(diffY) // 2))
+            return torch.clamp(x + y, -1, 1)
+        return y
 
 
 class UnetSkipConnectionBlock(nn.Module):
