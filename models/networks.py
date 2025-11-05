@@ -1,8 +1,10 @@
 import torch
-import torch.nn as nn
 from torch.nn import init
 import functools
 from torch.optim import lr_scheduler
+import torch.nn as nn
+import torch.nn.functional as F
+import math
 
 
 ###############################################################################
@@ -117,7 +119,8 @@ def init_net(net, init_type='normal', init_gain=0.02, gpu_ids=[]):
     return net
 
 
-def define_G(input_nc, output_nc, ngf, netG, norm='batch', use_dropout=False, init_type='normal', init_gain=0.02, gpu_ids=[]):
+def define_G(input_nc, output_nc, ngf, netG, norm='batch', use_dropout=False, init_type='normal', init_gain=0.02,
+             gpu_ids=[], filter_mode=False):
     """Create a generator
 
     Parameters:
@@ -148,13 +151,17 @@ def define_G(input_nc, output_nc, ngf, netG, norm='batch', use_dropout=False, in
     norm_layer = get_norm_layer(norm_type=norm)
 
     if netG == 'resnet_9blocks':
-        net = ResnetGenerator(input_nc, output_nc, ngf, norm_layer=norm_layer, use_dropout=use_dropout, n_blocks=9)
+        net = ResnetGenerator(input_nc, output_nc, ngf, norm_layer=norm_layer, use_dropout=use_dropout, n_blocks=9,
+                              filter_mode=filter_mode)
     elif netG == 'resnet_6blocks':
-        net = ResnetGenerator(input_nc, output_nc, ngf, norm_layer=norm_layer, use_dropout=use_dropout, n_blocks=6)
+        net = ResnetGenerator(input_nc, output_nc, ngf, norm_layer=norm_layer, use_dropout=use_dropout, n_blocks=6,
+                              filter_mode=filter_mode)
     elif netG == 'unet_128':
-        net = UnetGenerator(input_nc, output_nc, 7, ngf, norm_layer=norm_layer, use_dropout=use_dropout)
+        net = UnetGenerator(input_nc, output_nc, 7, ngf, norm_layer=norm_layer, use_dropout=use_dropout,
+                            filter_mode=filter_mode)
     elif netG == 'unet_256':
-        net = UnetGenerator(input_nc, output_nc, 8, ngf, norm_layer=norm_layer, use_dropout=use_dropout)
+        net = UnetGenerator(input_nc, output_nc, 8, ngf, norm_layer=norm_layer, use_dropout=use_dropout,
+                            filter_mode=filter_mode)
     else:
         raise NotImplementedError('Generator model name [%s] is not recognized' % netG)
     return init_net(net, init_type, init_gain, gpu_ids)
@@ -207,6 +214,54 @@ def define_D(input_nc, ndf, netD, n_layers_D=3, norm='batch', init_type='normal'
 ##############################################################################
 # Classes
 ##############################################################################
+class ModulatedConv2d(nn.Module):
+    """
+    Per-sample modulated convolution with optional demodulation (StyleGAN2 style)
+    Designed to replace standard Conv2d in generator upsampling blocks
+    """
+
+    def __init__(self, in_channels, out_channels, kernel_size, demodulate=True, stride=1, padding=1, bias=True):
+        super().__init__()
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.kernel_size = kernel_size
+        self.stride = stride
+        self.padding = padding
+        self.demodulate = demodulate
+
+        # Standard convolution weight, will be modulated per-sample
+        self.weight = nn.Parameter(torch.randn(1, out_channels, in_channels, kernel_size, kernel_size))
+        if bias:
+            self.bias = nn.Parameter(torch.zeros(out_channels))
+        else:
+            self.bias = None
+
+    def forward(self, x, style):
+        """
+        x: [batch, in_channels, H, W]
+        style: [batch, in_channels] — per-sample scaling of channels
+        """
+        batch, in_c, h, w = x.shape
+        # 1. Modulate
+        weight = self.weight * (style[:, None, :, None, None] + 1.0)  # broadcasting style
+
+        # 2. Demodulate
+        if self.demodulate:
+            # Calculate per-sample, per-output-channel std
+            d = torch.rsqrt((weight ** 2).sum([2, 3, 4]) + 1e-8)
+            weight = weight * d[:, :, None, None, None]
+
+        # 3. Reshape for group conv trick (batch as group)
+        x = x.view(1, -1, h, w)
+        weight = weight.view(-1, in_c, self.kernel_size, self.kernel_size)
+        out = F.conv2d(x, weight, bias=None, stride=self.stride, padding=self.padding, groups=batch)
+        out = out.view(batch, self.out_channels, out.shape[-2], out.shape[-1])
+
+        if self.bias is not None:
+            out = out + self.bias[None, :, None, None]
+
+        return out
+
 class GANLoss(nn.Module):
     """Define different GAN objectives.
 
@@ -312,17 +367,29 @@ def cal_gradient_penalty(netD, real_data, fake_data, device, type='mixed', const
     else:
         return 0.0, None
 
+
 # --- Define UpsampleBlock properly ---
 class UpsampleBlock(nn.Module):
-    def __init__(self, in_ch, out_ch):
+    def __init__(self, in_channels, out_channels):
         super().__init__()
-        self.block = nn.Sequential(
-            nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False),
-            nn.Conv2d(in_ch, out_ch, kernel_size=3, stride=1, padding=1)
-        )
+        self.upsample = nn.Upsample(scale_factor=2, mode='nearest')
+        # Instead of Conv2d, use modulated conv
+        self.conv = ModulatedConv2d(in_channels, out_channels, kernel_size=3, padding=1)
+
+        self.norm = nn.InstanceNorm2d(out_channels)
+        self.relu = nn.ReLU(True)
 
     def forward(self, x):
-        return self.block(x)
+        x = self.upsample(x)
+
+        # Create a dummy "style" per sample: ones or learnable (simplest: ones)
+        # Shape: [batch, in_channels]
+        style = torch.ones(x.shape[0], x.shape[1], device=x.device)
+        x = self.conv(x, style)
+
+        x = self.norm(x)
+        x = self.relu(x)
+        return x
 
 
 
@@ -331,9 +398,10 @@ class ResnetGenerator(nn.Module):
     """Resnet-based generator with bilinear upsampling (no checkerboard artifacts)."""
 
     def __init__(self, input_nc, output_nc, ngf=64, norm_layer=nn.BatchNorm2d,
-                 use_dropout=False, n_blocks=6, padding_type='reflect'):
+                 use_dropout=False, n_blocks=6, padding_type='reflect', filter_mode=False):
         assert(n_blocks >= 0)
         super().__init__()
+        self.filter_mode = filter_mode
 
         if type(norm_layer) == functools.partial:
             use_bias = norm_layer.func == nn.InstanceNorm2d
@@ -383,6 +451,21 @@ class ResnetGenerator(nn.Module):
         self.model = nn.Sequential(*model)
 
     def forward(self, x):
+        if self.filter_mode:
+            y = self.model(x)
+            # make sure shapes match
+            if y.size() != x.size():
+                # crop or pad to match
+                diffY = y.size(2) - x.size(2)
+                diffX = y.size(3) - x.size(3)
+
+                if diffY > 0 or diffX > 0:
+                    y = y[:, :, diffY // 2:y.size(2) - (diffY - diffY // 2),
+                    diffX // 2:y.size(3) - (diffX - diffX // 2)]
+                elif diffY < 0 or diffX < 0:
+                    y = F.pad(y, (abs(diffX) // 2, abs(diffX) - abs(diffX) // 2,
+                                  abs(diffY) // 2, abs(diffY) - abs(diffY) // 2))
+            return torch.clamp(x + y, -1, 1)
         return self.model(x)
 
 class ResnetBlock(nn.Module):
@@ -448,7 +531,8 @@ class ResnetBlock(nn.Module):
 class UnetGenerator(nn.Module):
     """Create a Unet-based generator"""
 
-    def __init__(self, input_nc, output_nc, num_downs, ngf=64, norm_layer=nn.BatchNorm2d, use_dropout=False):
+    def __init__(self, input_nc, output_nc, num_downs, ngf=64, norm_layer=nn.BatchNorm2d, use_dropout=False,
+                 filter_mode=False):
         """Construct a Unet generator
         Parameters:
             input_nc (int)  -- the number of channels in input images
@@ -463,6 +547,7 @@ class UnetGenerator(nn.Module):
         """
         super(UnetGenerator, self).__init__()
         # construct unet structure
+        self.filter_mode = filter_mode
         unet_block = UnetSkipConnectionBlock(ngf * 8, ngf * 8, input_nc=None, submodule=None, norm_layer=norm_layer, innermost=True)  # add the innermost layer
         for i in range(num_downs - 5):          # add intermediate layers with ngf * 8 filters
             unet_block = UnetSkipConnectionBlock(ngf * 8, ngf * 8, input_nc=None, submodule=unet_block, norm_layer=norm_layer, use_dropout=use_dropout)
@@ -474,6 +559,8 @@ class UnetGenerator(nn.Module):
 
     def forward(self, input):
         """Standard forward"""
+        if self.filter_mode:
+            return torch.clamp(input + self.model(input), -1, 1)
         return self.model(input)
 
 

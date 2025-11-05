@@ -1,6 +1,7 @@
 import torch
 from .base_model import BaseModel
 from . import networks
+from torch.cuda.amp import autocast, GradScaler
 
 
 class Pix2PixModel(BaseModel):
@@ -36,6 +37,13 @@ class Pix2PixModel(BaseModel):
 
         return parser
 
+    @staticmethod
+    def total_variation_loss(img):
+        """Compute total variation loss for an image batch."""
+        loss = torch.mean(torch.abs(img[:, :, :, :-1] - img[:, :, :, 1:])) + \
+               torch.mean(torch.abs(img[:, :, :-1, :] - img[:, :, 1:, :]))
+        return loss
+
     def __init__(self, opt):
         """Initialize the pix2pix class.
 
@@ -54,7 +62,7 @@ class Pix2PixModel(BaseModel):
             self.model_names = ['G']
         # define networks (both generator and discriminator)
         self.netG = networks.define_G(opt.input_nc, opt.output_nc, opt.ngf, opt.netG, opt.norm,
-                                      not opt.no_dropout, opt.init_type, opt.init_gain, self.gpu_ids)
+                                      not opt.no_dropout, opt.init_type, opt.init_gain, self.gpu_ids, opt.filter_mode)
 
         if self.isTrain:  # define a discriminator; conditional GANs need to take both input and output images; Therefore, #channels for D is input_nc + output_nc
             self.netD = networks.define_D(opt.input_nc + opt.output_nc, opt.ndf, opt.netD,
@@ -67,6 +75,9 @@ class Pix2PixModel(BaseModel):
             # initialize optimizers; schedulers will be automatically created by function <BaseModel.setup>.
             self.optimizer_G = torch.optim.Adam(self.netG.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
             self.optimizer_D = torch.optim.Adam(self.netD.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
+            # self.scaler_G = torch.cuda.amp.GradScaler(init_scale=1024)  # smaller starting scale
+            # self.scaler_D = torch.cuda.amp.GradScaler(init_scale=1024)
+
             self.optimizers.append(self.optimizer_G)
             self.optimizers.append(self.optimizer_D)
 
@@ -101,6 +112,25 @@ class Pix2PixModel(BaseModel):
         self.loss_D = (self.loss_D_fake + self.loss_D_real) * 0.5
         self.loss_D.backward()
 
+    # def backward_D(self):
+    #     self.optimizer_D.zero_grad(set_to_none=True)
+    #     with autocast():
+    #         # Compute fake and real losses
+    #         fake_AB = torch.cat((self.real_A, self.fake_B.detach()), 1)
+    #         pred_fake = self.netD(fake_AB)
+    #         self.loss_D_fake = self.criterionGAN(pred_fake, False)
+    #
+    #         real_AB = torch.cat((self.real_A, self.real_B), 1)
+    #         pred_real = self.netD(real_AB)
+    #         self.loss_D_real = self.criterionGAN(pred_real, True)
+    #
+    #         self.loss_D = (self.loss_D_fake + self.loss_D_real) * 0.5
+    #
+    #     # backward with AMP
+    #     self.scaler_D.scale(self.loss_D).backward()
+    #     self.scaler_D.step(self.optimizer_D)
+    #     self.scaler_D.update()
+
     def backward_G(self):
         """Calculate GAN and L1 loss for the generator"""
         # First, G(A) should fake the discriminator
@@ -109,9 +139,33 @@ class Pix2PixModel(BaseModel):
         self.loss_G_GAN = self.criterionGAN(pred_fake, True)
         # Second, G(A) = B
         self.loss_G_L1 = self.criterionL1(self.fake_B, self.real_B) * self.opt.lambda_L1
+        # --- ✅ Total Variation (TV) loss ---
+        if hasattr(self.opt, "lambda_TV") and self.opt.lambda_TV > 0:
+            self.loss_G_TV = self.opt.lambda_TV * self.total_variation_loss(self.fake_B)
+        else:
+            self.loss_G_TV = 0
         # combine loss and calculate gradients
-        self.loss_G = self.loss_G_GAN + self.loss_G_L1
+        self.loss_G = self.loss_G_GAN + self.loss_G_L1 + self.loss_G_TV
+
         self.loss_G.backward()
+
+    # def backward_G(self):
+    #     self.optimizer_G.zero_grad(set_to_none=True)
+    #     with autocast():
+    #         fake_AB = torch.cat((self.real_A, self.fake_B), 1)
+    #         pred_fake = self.netD(fake_AB)
+    #         self.loss_G_GAN = self.criterionGAN(pred_fake, True)
+    #         self.loss_G_L1 = self.criterionL1(self.fake_B, self.real_B) * self.opt.lambda_L1
+    #
+    #         if hasattr(self.opt, "lambda_TV") and self.opt.lambda_TV > 0:
+    #             self.loss_G_TV = self.opt.lambda_TV * self.total_variation_loss(self.fake_B)
+    #         else:
+    #             self.loss_G_TV = 0
+    #         self.loss_G = self.loss_G_GAN + self.loss_G_L1 + self.loss_G_TV
+    #
+    #     self.scaler_G.scale(self.loss_G).backward()
+    #     self.scaler_G.step(self.optimizer_G)
+    #     self.scaler_G.update()
 
     def optimize_parameters(self):
         self.forward()                   # compute fake images: G(A)

@@ -57,6 +57,8 @@ class BaseOptions():
         # wandb parameters
         parser.add_argument('--use_wandb', action='store_true', help='if specified, then init wandb logging')
         parser.add_argument('--wandb_project_name', type=str, default='CycleGAN-and-pix2pix', help='specify wandb project name')
+        parser.add_argument('--filter_mode', action='store_true')
+        parser.add_argument('--lambda_TV', type=float, default=0)
         self.initialized = True
         return parser
 
