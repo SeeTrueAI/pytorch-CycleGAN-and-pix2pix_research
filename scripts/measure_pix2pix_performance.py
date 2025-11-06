@@ -11,15 +11,16 @@ from tqdm import tqdm
 input_folder = "/remote/tnas1/algo/koren/dfw-pix2pix-dc/raw/trainA_pre_crop_crops/"
 gt_folder    = "/remote/tnas1/algo/koren/dfw-pix2pix-dc/raw/trainB_pre_crop_crops/"
 
-output_folder = "/remote/tnas1/algo/koren/dfw-pix2pix-dc/results"
+output_folder = "/remote/tnas1/algo/koren/dfw-pix2pix-dc/results_resnet9_instance_delta_10_512"
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Load your trained generator
 from models.networks import define_G  # adjust import to your pix2pix repo structure
 
 
-netG = define_G(input_nc=3, output_nc=3, ngf=128, netG='resnet_9blocks', norm='instance', filter_mode=True, use_dropout=True)
-checkpoint_path = "/home/korenbe/repos/pytorch-CycleGAN-and-pix2pix_research/checkpoints/nuctech_filter_lambda_10_instance_resnetU_512_lr05_lTV1-4_ngf128_epochs_200200_b107_nD140_demod/latest_net_G.pth"
+netG = define_G(input_nc=3, output_nc=3, ngf=64, netG='resnet_9blocks', norm='none',
+                predict_delta=True, use_dropout=True)
+checkpoint_path = "/home/korenbe/repos/pytorch-CycleGAN-and-pix2pix_research/checkpoints/none_512_2-4_10_resnet_64_4_delta/latest_net_G.pth"
 netG.load_state_dict(torch.load(checkpoint_path, map_location=device))
 netG.to(device)
 netG.eval()

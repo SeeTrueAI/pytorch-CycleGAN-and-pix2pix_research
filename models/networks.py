@@ -453,16 +453,16 @@ class ResnetGenerator(nn.Module):
 
     def forward(self, x):
         y = self.model(x)
+        if y.size() != x.size():
+            diffY, diffX = y.size(2) - x.size(2), y.size(3) - x.size(3)
+            if diffY > 0 or diffX > 0:
+                y = y[:, :, diffY // 2: y.size(2) - (diffY - diffY // 2),
+                diffX // 2: y.size(3) - (diffX - diffX // 2)]
+            elif diffY < 0 or diffX < 0:
+                y = F.pad(y, (abs(diffX) // 2, abs(diffX) - abs(diffX) // 2,
+                              abs(diffY) // 2, abs(diffY) - abs(diffY) // 2))
         if self.predict_delta:
             # residual-like mode
-            if y.size() != x.size():
-                diffY, diffX = y.size(2) - x.size(2), y.size(3) - x.size(3)
-                if diffY > 0 or diffX > 0:
-                    y = y[:, :, diffY // 2 : y.size(2) - (diffY - diffY // 2),
-                           diffX // 2 : y.size(3) - (diffX - diffX // 2)]
-                elif diffY < 0 or diffX < 0:
-                    y = F.pad(y, (abs(diffX)//2, abs(diffX)-abs(diffX)//2,
-                                  abs(diffY)//2, abs(diffY)-abs(diffY)//2))
             return torch.clamp(x + y, -1, 1)
         return y
 
@@ -610,10 +610,19 @@ class UnetSkipConnectionBlock(nn.Module):
         self.model = nn.Sequential(*model)
 
     def forward(self, x):
+        y = self.model(x)
+        if y.size() != x.size():
+            diffY, diffX = y.size(2) - x.size(2), y.size(3) - x.size(3)
+            if diffY > 0 or diffX > 0:
+                y = y[:, :, diffY // 2: y.size(2) - (diffY - diffY // 2),
+                diffX // 2: y.size(3) - (diffX - diffX // 2)]
+            elif diffY < 0 or diffX < 0:
+                y = F.pad(y, (abs(diffX) // 2, abs(diffX) - abs(diffX) // 2,
+                              abs(diffY) // 2, abs(diffY) - abs(diffY) // 2))
         if self.outermost:
-            return self.model(x)
+            return y
         else:   # add skip connections
-            return torch.cat([x, self.model(x)], 1)
+            return torch.cat([x, y], 1)
 
 
 class NLayerDiscriminator(nn.Module):
