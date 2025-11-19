@@ -61,6 +61,7 @@ class BaseOptions():
         parser.add_argument('--use_modulated_conv', action='store_true')
         parser.add_argument('--use_upsample', action='store_true')
         parser.add_argument('--lambda_TV', type=float, default=0)
+        parser.add_argument('--lambda_detail', type=float, default=0)
         self.initialized = True
         return parser
 

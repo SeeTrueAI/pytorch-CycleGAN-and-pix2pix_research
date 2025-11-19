@@ -3,6 +3,28 @@ from .base_model import BaseModel
 from . import networks
 from torch.cuda.amp import autocast, GradScaler
 
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+
+class LaplacianLoss(nn.Module):
+    def __init__(self):
+        super().__init__()
+        laplacian_kernel = torch.tensor(
+            [[0, 1, 0],
+             [1, -4, 1],
+             [0, 1, 0]], dtype=torch.float32
+        ).unsqueeze(0).unsqueeze(0)  # shape 1×1×3×3
+        self.weight = nn.Parameter(laplacian_kernel, requires_grad=False)
+
+    def forward(self, input, target):
+        B, C, _, _ = input.shape
+        weight = self.weight.repeat(C, 1, 1, 1)  # one per channel
+        lap_input = F.conv2d(input, weight, padding=1, groups=C)
+        lap_target = F.conv2d(target, weight, padding=1, groups=C)
+        return F.l1_loss(lap_input, lap_target)
+
 
 class Pix2PixModel(BaseModel):
     """ This class implements the pix2pix model, for learning a mapping from input images to output images given paired data.
@@ -74,7 +96,8 @@ class Pix2PixModel(BaseModel):
             # define loss functions
             self.criterionGAN = networks.GANLoss(opt.gan_mode).to(self.device)
             self.criterionL1 = torch.nn.L1Loss()
-            # initialize optimizers; schedulers will be automatically created by function <BaseModel.setup>.
+            # NEW: instantiate Laplacian loss
+            self.criterionDetail = LaplacianLoss().to(self.device)            # initialize optimizers; schedulers will be automatically created by function <BaseModel.setup>.
             self.optimizer_G = torch.optim.Adam(self.netG.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
             self.optimizer_D = torch.optim.Adam(self.netD.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
             # self.scaler_G = torch.cuda.amp.GradScaler(init_scale=1024)  # smaller starting scale
@@ -141,13 +164,17 @@ class Pix2PixModel(BaseModel):
         self.loss_G_GAN = self.criterionGAN(pred_fake, True)
         # Second, G(A) = B
         self.loss_G_L1 = self.criterionL1(self.fake_B, self.real_B) * self.opt.lambda_L1
+
+        # 3. Detail/Laplacian loss
+        self.loss_G_detail = self.criterionDetail(self.fake_B, self.real_B) * self.opt.lambda_detail
         # --- ✅ Total Variation (TV) loss ---
         if hasattr(self.opt, "lambda_TV") and self.opt.lambda_TV > 0:
             self.loss_G_TV = self.opt.lambda_TV * self.total_variation_loss(self.fake_B)
         else:
             self.loss_G_TV = 0
+
         # combine loss and calculate gradients
-        self.loss_G = self.loss_G_GAN + self.loss_G_L1 + self.loss_G_TV
+        self.loss_G = self.loss_G_GAN + self.loss_G_L1 + self.loss_G_TV + self.loss_G_detail
 
         self.loss_G.backward()
 

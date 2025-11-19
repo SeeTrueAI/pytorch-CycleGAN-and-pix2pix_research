@@ -621,8 +621,15 @@ class UnetSkipConnectionBlock(nn.Module):
                               abs(diffY) // 2, abs(diffY) - abs(diffY) // 2))
         if self.outermost:
             return y
-        else:   # add skip connections
-            return torch.cat([x, y], 1)
+        else:
+            # --- ADD THIS ---
+            # small dropout or noise on the skip feature
+            skip = x
+            # skip = F.dropout(skip, p=0.2, training=self.training)
+            # skip = skip * (0.9 + 0.1*torch.rand_like(skip[:, :1, :, :]))
+            # ----------------
+            # add skip connections
+            return torch.cat([skip, y], 1)
 
 
 class NLayerDiscriminator(nn.Module):
