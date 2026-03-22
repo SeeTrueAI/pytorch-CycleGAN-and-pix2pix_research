@@ -83,7 +83,7 @@ def fetch_data(
         return None, str(exc), url
 
 
-def _find_col(columns: list[str], *candidates: str) -> str | None:
+def _find_col(columns, *candidates):
     """Case-insensitive column lookup."""
     upper = {c.upper(): c for c in columns}
     for cand in candidates:
